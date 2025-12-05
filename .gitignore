@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Byte-compiled / optimized files
 __pycache__/
 *.pyc
@@ -33,3 +34,40 @@ config.json
 # Token / secrets
 token.txt
 secret.txt
+=======
+# Byte-compiled / optimized files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment folders
+venv/
+env/
+.venv/
+
+# Environment variables
+.env
+*.env
+
+# VS Code settings
+.vscode/
+
+# Mac / Windows junk
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# PyCharm
+.idea/
+
+# Local settings
+config.json
+.chache/
+
+# Token / secrets
+token.txt
+secret.txt
+>>>>>>> a375df8 (Update files)
