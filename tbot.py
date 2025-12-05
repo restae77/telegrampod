@@ -1,5 +1,7 @@
 import re
 import asyncio
+import json
+import logging
 from datetime import datetime, timedelta, time, timezone
 from telegram import Update, ChatMember
 from telegram.ext import (
@@ -13,19 +15,58 @@ from telegram.ext import (
 )
 import os
 
-# BOT TOKEN LOADED FROM RAILWAY ENVIRONMENT VARIABLE
+# ---------------- CONFIG ----------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+DATA_FILE = "group_data.json"  # file to save/load bot state
 
 INACTIVITY_HOURS = 24
 REMOVAL_HOURS = 72
 DAILY_TAG_HOUR_UTC1 = 22  # 11 PM UTC+1
 JOB_INTERVAL_SECONDS = 3600  # Check every hour
 
-# Global storage
+# ---------------- LOGGING ----------------
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# ---------------- GLOBAL STORAGE ----------------
 group_data = {}  # {chat_id: {"stacked_urls": [], "last_bot_message_id": None, "user_last_message_time": {}, "all_members": []}}
 
+# ---------------- DATA PERSISTENCE ----------------
+def save_data():
+    try:
+        with open(DATA_FILE, "w") as f:
+            json.dump(group_data, f, default=str)
+    except Exception as e:
+        logger.error(f"Error saving data: {e}")
+
+def load_data():
+    global group_data
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r") as f:
+                group_data = json.load(f)
+                # convert last_message_time strings back to datetime
+                for chat_id, data in group_data.items():
+                    for user_id, ts in data.get("user_last_message_time", {}).items():
+                        data["user_last_message_time"][int(user_id)] = datetime.fromisoformat(ts)
+        except Exception as e:
+            logger.error(f"Error loading data: {e}")
+
+load_data()
+
+# ---------------- UTILITY ----------------
 def extract_urls(text: str):
     return re.findall(r"(https?://\S+)", text)
+
+async def auto_delete_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, msg_id: int, delay: int):
+    await asyncio.sleep(delay)
+    try:
+        await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
+    except:
+        pass
 
 # ---------------- LINK STACKING ----------------
 async def update_stack_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
@@ -43,6 +84,7 @@ async def update_stack_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int)
 
     msg = await context.bot.send_message(chat_id=chat_id, text=text)
     data["last_bot_message_id"] = msg.message_id
+    save_data()
 
 async def stack_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -71,6 +113,7 @@ async def stack_urls(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     await update_stack_message(context, chat_id)
+    save_data()
 
 async def reset_stack(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -91,6 +134,7 @@ async def reset_stack(update: Update, context: ContextTypes.DEFAULT_TYPE):
             data["last_bot_message_id"] = None
 
     await update.message.reply_text("URL list has been reset.")
+    save_data()
 
 # ---------------- MEMBER TRACKING ----------------
 async def track_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -113,6 +157,7 @@ async def track_new_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user.id not in [m.user.id for m in data["all_members"]]:
         data["all_members"].append(member.new_chat_member)
         data["user_last_message_time"][user.id] = datetime.now(timezone.utc)
+        save_data()
 
 # ---------------- MUTING / REMOVAL ----------------
 async def mute_remove_inactive(context: ContextTypes.DEFAULT_TYPE):
@@ -127,16 +172,9 @@ async def mute_remove_inactive(context: ContextTypes.DEFAULT_TYPE):
             if not last_msg or (now - last_msg) > timedelta(hours=INACTIVITY_HOURS):
                 if not muted_until:
                     try:
-                        await context.bot.restrict_chat_member(
-                            chat_id=chat_id,
-                            user_id=member.user.id,
-                            permissions=None,
-                        )
+                        await context.bot.restrict_chat_member(chat_id=chat_id, user_id=member.user.id, permissions=None)
                         member.user.muted_until = now
-                        msg = await context.bot.send_message(
-                            chat_id=chat_id,
-                            text=f"@{member.user.username} has been muted for inactivity.",
-                        )
+                        msg = await context.bot.send_message(chat_id=chat_id, text=f"@{member.user.username} has been muted for inactivity.")
                         asyncio.create_task(auto_delete_message(context, chat_id, msg.message_id, 60))
                     except:
                         continue
@@ -144,13 +182,11 @@ async def mute_remove_inactive(context: ContextTypes.DEFAULT_TYPE):
             if muted_until and (now - muted_until) > timedelta(hours=REMOVAL_HOURS):
                 try:
                     await context.bot.ban_chat_member(chat_id=chat_id, user_id=member.user.id)
-                    msg = await context.bot.send_message(
-                        chat_id=chat_id,
-                        text=f"@{member.user.username} has been removed for inactivity.",
-                    )
+                    msg = await context.bot.send_message(chat_id=chat_id, text=f"@{member.user.username} has been removed for inactivity.")
                     asyncio.create_task(auto_delete_message(context, chat_id, msg.message_id, 60))
                     del data["user_last_message_time"][member.user.id]
                     member.user.muted_until = None
+                    save_data()
                 except:
                     continue
 
@@ -180,15 +216,12 @@ async def unmute_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        await context.bot.restrict_chat_member(
-            chat_id=chat_id, 
-            user_id=target.user.id,
-            permissions={"can_send_messages": True}
-        )
+        await context.bot.restrict_chat_member(chat_id=chat_id, user_id=target.user.id, permissions={"can_send_messages": True})
         data["user_last_message_time"][target.user.id] = datetime.now(timezone.utc)
         target.user.muted_until = None
         msg = await update.message.reply_text(f"@{username} has been unmuted.")
         asyncio.create_task(auto_delete_message(context, chat_id, msg.message_id, 60))
+        save_data()
     except:
         pass
 
@@ -200,23 +233,13 @@ async def daily_tag_inactive(context: ContextTypes.DEFAULT_TYPE):
         for member in data.get("all_members", []):
             if member.user.is_bot or member.status in ["administrator", "creator"]:
                 continue
-
             last_msg = data["user_last_message_time"].get(member.user.id)
-
             if not last_msg or (now - last_msg) > timedelta(hours=INACTIVITY_HOURS):
                 inactive_users.append(f"@{member.user.username}")
 
         if inactive_users:
             text = "Inactive members in last 24 hours:\n" + " ".join(inactive_users)
             await context.bot.send_message(chat_id=chat_id, text=text)
-
-# ---------------- HELPER ----------------
-async def auto_delete_message(context: ContextTypes.DEFAULT_TYPE, chat_id: int, msg_id: int, delay: int):
-    await asyncio.sleep(delay)
-    try:
-        await context.bot.delete_message(chat_id=chat_id, message_id=msg_id)
-    except:
-        pass
 
 # ---------------- ENTRY POINT ----------------
 if __name__ == "__main__":
@@ -229,11 +252,7 @@ if __name__ == "__main__":
 
     job_queue: JobQueue = app.job_queue
     job_queue.run_repeating(mute_remove_inactive, interval=JOB_INTERVAL_SECONDS, first=30)
+    job_queue.run_daily(daily_tag_inactive, time=time(hour=DAILY_TAG_HOUR_UTC1, minute=0, tzinfo=timezone(timedelta(hours=1))))
 
-    job_queue.run_daily(
-        daily_tag_inactive,
-        time=time(hour=DAILY_TAG_HOUR_UTC1, minute=0, tzinfo=timezone(timedelta(hours=1)))
-    )
-
-    print("Bot is running...")
+    logger.info("Bot is running...")
     app.run_polling()

@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 # Byte-compiled / optimized files
 __pycache__/
 *.pyc
@@ -27,47 +26,16 @@ Thumbs.db
 # PyCharm
 .idea/
 
-# Local settings
+# Local settings / data files
 config.json
-.chache/
+group_data.json
+.cache/
 
 # Token / secrets
 token.txt
 secret.txt
-=======
-# Byte-compiled / optimized files
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
 
-# Virtual environment folders
-venv/
-env/
-.venv/
-
-# Environment variables
-.env
-*.env
-
-# VS Code settings
-.vscode/
-
-# Mac / Windows junk
-.DS_Store
-Thumbs.db
-
-# Logs
-*.log
-
-# PyCharm
-.idea/
-
-# Local settings
-config.json
-.chache/
-
-# Token / secrets
-token.txt
-secret.txt
->>>>>>> a375df8 (Update files)
+# Deployment / runtime files (optional)
+*.pid
+*.sock
+*.bak
